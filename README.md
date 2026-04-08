@@ -31,3 +31,10 @@ terraform plan
 -> Execucao de init, validate e plan da stack de rede.
 -> Execucao de terraform apply da stack de rede (VPC, subnets, IGW e route tables).
 -> Validacao final com terraform plan sem mudancas (No changes).
+-> Criacao de orcamento (AWS Budget) para controle de custos.
+-> Evolucao da stack de rede para EKS-ready (2 AZs, 2 subnets publicas e 2 privadas).
+-> Adicao das tags de subnets para Kubernetes/ALB (kubernetes.io/role/elb e kubernetes.io/role/internal-elb).
+-> Execucao de terraform plan da rede EKS-ready.
+-> Execucao de terraform apply da rede EKS-ready (4 recursos criados, 2 atualizados).
+-> Validacao final da rede EKS-ready com terraform plan sem mudancas (No changes).
+-> Confirmacao de que nao ha NAT Gateway criado na VPC.
