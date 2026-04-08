@@ -10,6 +10,12 @@ variable "project_name" {
   default     = "deploy-camunda-88-aws"
 }
 
+variable "eks_cluster_name" {
+  description = "EKS cluster name used in subnet tags"
+  type        = string
+  default     = "deploy-camunda-88-eks"
+}
+
 variable "vpc_cidr" {
   description = "CIDR block for VPC"
   type        = string
@@ -26,6 +32,18 @@ variable "private_subnet_cidr" {
   description = "CIDR block for private subnet"
   type        = string
   default     = "10.20.2.0/24"
+}
+
+variable "public_subnet_az2_cidr" {
+  description = "CIDR block for second public subnet"
+  type        = string
+  default     = "10.20.3.0/24"
+}
+
+variable "private_subnet_az2_cidr" {
+  description = "CIDR block for second private subnet"
+  type        = string
+  default     = "10.20.4.0/24"
 }
 
 variable "tags" {
