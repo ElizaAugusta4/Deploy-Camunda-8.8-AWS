@@ -1,9 +1,0 @@
-aws_region   = "us-east-1"
-project_name = "deploy-camunda-88-aws"
-
-tags = {
-  Project     = "deploy-camunda-8.8"
-  Environment = "prod"
-  ManagedBy   = "terraform"
-  Owner       = "eliza"
-}
