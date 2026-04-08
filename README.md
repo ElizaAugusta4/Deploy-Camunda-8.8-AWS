@@ -42,3 +42,9 @@ terraform plan
 -> Execucao de terraform fmt, init, validate e plan da stack de EKS.
 -> Planejamento do EKS no modo de menor custo inicial (node group em subnets publicas, sem NAT).
 -> Commit das alteracoes de rede EKS-ready + stack EKS no repositorio.
+-> Resolucao de lock do Terraform state do modulo EKS e conciliacao de recursos via import.
+-> Execucao de terraform apply da stack de EKS com node group criado com sucesso.
+-> Validacao do cluster EKS ativo com node Ready e kube-system em Running.
+-> Configuracao de OIDC provider do cluster para autenticacao federada.
+-> Criacao das roles IRSA para aws-load-balancer-controller e external-dns.
+-> Execucao de terraform apply da etapa OIDC/IRSA sem destruicao de recursos.
