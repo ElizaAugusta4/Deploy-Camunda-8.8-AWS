@@ -38,3 +38,7 @@ terraform plan
 -> Execucao de terraform apply da rede EKS-ready (4 recursos criados, 2 atualizados).
 -> Validacao final da rede EKS-ready com terraform plan sem mudancas (No changes).
 -> Confirmacao de que nao ha NAT Gateway criado na VPC.
+-> Criacao da stack de EKS em infra/eks com backend remoto (S3 + DynamoDB lock).
+-> Execucao de terraform fmt, init, validate e plan da stack de EKS.
+-> Planejamento do EKS no modo de menor custo inicial (node group em subnets publicas, sem NAT).
+-> Commit das alteracoes de rede EKS-ready + stack EKS no repositorio.
