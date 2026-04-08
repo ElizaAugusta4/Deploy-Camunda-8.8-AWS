@@ -48,3 +48,127 @@ terraform plan
 -> Configuracao de OIDC provider do cluster para autenticacao federada.
 -> Criacao das roles IRSA para aws-load-balancer-controller e external-dns.
 -> Execucao de terraform apply da etapa OIDC/IRSA sem destruicao de recursos.
+-> Atualizacao do kubeconfig e validacao do cluster EKS com node group ativo.
+-> Instalacao do metrics-server via Helm no namespace kube-system.
+-> Instalacao do cert-manager via Helm no namespace cert-manager.
+-> Instalacao do AWS Load Balancer Controller via Helm com ServiceAccount anotada por IRSA.
+-> Validacao dos deployments e pods dos addons em estado Running.
+
+## Execucao detalhada por pasta (ordem correta)
+
+Antes de rodar Terraform em qualquer pasta:
+
+1. Definir profile AWS na sessao:
+	 - $env:AWS_PROFILE="conta-id"
+
+### 1) infra/bootstrap
+
+Objetivo: criar backend remoto do Terraform (S3 + DynamoDB lock).
+
+1. terraform init
+2. terraform validate
+3. terraform plan
+4. terraform apply
+
+Resultado esperado:
+
+- Bucket S3 de state criado
+- Tabela DynamoDB de lock criada
+
+### 2) infra/network (primeira execucao)
+
+Objetivo: criar rede base.
+
+1. terraform init
+2. terraform validate
+3. terraform plan
+4. terraform apply
+
+Resultado esperado:
+
+- VPC
+- Subnet publica e privada
+- IGW
+- Route tables e associacoes
+
+### 3) infra/network (evolucao para EKS-ready)
+
+Objetivo: preparar rede para EKS em 2 AZs.
+
+1. terraform fmt
+2. terraform validate
+3. terraform plan
+4. terraform apply
+5. terraform plan (confirmacao final sem mudancas)
+
+Resultado esperado:
+
+- 2 subnets publicas + 2 subnets privadas
+- Tags kubernetes.io/role/elb e kubernetes.io/role/internal-elb
+- Tags kubernetes.io/cluster/deploy-camunda-88-eks
+
+### 4) infra/eks (criacao do cluster)
+
+Objetivo: subir cluster EKS e node group.
+
+1. terraform init
+2. terraform validate
+3. terraform plan
+4. terraform apply
+
+Observacoes importantes desta etapa:
+
+- Foi necessario tratar lock de state (force-unlock).
+- Foi necessario importar recursos ja existentes para o state:
+	- aws_iam_role.eks_cluster
+	- aws_iam_role.eks_nodes
+	- aws_eks_cluster.main
+- Depois do import, foi executado novamente:
+	1. terraform plan
+	2. terraform apply
+
+### 5) infra/eks (OIDC/IRSA)
+
+Objetivo: preparar identidade para addons.
+
+1. terraform fmt
+2. terraform init
+3. terraform validate
+4. terraform plan
+5. terraform apply
+
+Resultado esperado:
+
+- aws_iam_openid_connect_provider criado
+- Roles IRSA criadas para:
+	- aws-load-balancer-controller
+	- external-dns
+
+## Comandos manuais executados (fora do Terraform)
+
+Validacoes AWS/Kubernetes:
+
+- aws sts get-caller-identity --profile conta-id
+- aws eks list-clusters --region us-east-1
+- aws eks describe-cluster --region us-east-1 --name deploy-camunda-88-eks
+- aws eks update-kubeconfig --region us-east-1 --name deploy-camunda-88-eks --profile conta-id
+- kubectl get nodes -o wide
+- kubectl get pods -A
+
+Instalacao de addons via Helm:
+
+- metrics-server
+- cert-manager
+- aws-load-balancer-controller (com ServiceAccount anotada para IRSA)
+
+Comandos de verificacao dos addons:
+
+- kubectl -n kube-system rollout status deployment/metrics-server
+- kubectl -n kube-system rollout status deployment/aws-load-balancer-controller
+- kubectl -n cert-manager rollout status deployment/cert-manager
+- kubectl -n cert-manager rollout status deployment/cert-manager-webhook
+- kubectl -n cert-manager rollout status deployment/cert-manager-cainjector
+
+Nota:
+
+- O fluxo recomendado e sempre: terraform init -> terraform validate -> terraform plan -> terraform apply
