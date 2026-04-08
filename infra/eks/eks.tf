@@ -13,9 +13,10 @@ locals {
 }
 
 resource "aws_eks_cluster" "main" {
-  name     = var.cluster_name
-  role_arn = aws_iam_role.eks_cluster.arn
-  version  = var.kubernetes_version
+  name                          = var.cluster_name
+  role_arn                      = aws_iam_role.eks_cluster.arn
+  version                       = var.kubernetes_version
+  bootstrap_self_managed_addons = false
 
   vpc_config {
     subnet_ids              = concat(data.terraform_remote_state.network.outputs.public_subnet_ids, data.terraform_remote_state.network.outputs.private_subnet_ids)
