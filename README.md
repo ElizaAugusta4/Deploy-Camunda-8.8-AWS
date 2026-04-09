@@ -58,6 +58,9 @@ terraform plan
 -> Instalacao do cert-manager via Helm no namespace cert-manager.
 -> Instalacao do AWS Load Balancer Controller via Helm com ServiceAccount anotada por IRSA.
 -> Validacao dos deployments e pods dos addons em estado Running.
+-> Instalacao do addon aws-ebs-csi-driver no cluster EKS.
+-> Configuracao de permissao IAM para o EBS CSI (AmazonEBSCSIDriverPolicy) com trust OIDC/IRSA.
+-> Definicao da StorageClass gp2 como default e validacao de PVCs em Bound.
 -> Criacao da stack de ACM em infra/platform/acm com backend remoto (S3 + DynamoDB lock).
 -> Execucao de terraform fmt, init, validate e plan da stack de ACM.
 -> Execucao de terraform apply da stack de ACM com certificado criado em us-east-1.
@@ -69,6 +72,10 @@ terraform plan
 -> Criacao da stack de espelhamento de imagens em infra/platform/ecr-mirror.
 -> Mapeamento das imagens em uso no namespace camunda para envio ao ECR.
 -> Configuracao do Terraform para criacao/import de repositorios ECR e push das imagens via local-exec (docker pull/tag/push).
+-> Preparacao de apps/camunda com values customizado para EKS (chart 13.6.0) e scripts de deploy.
+-> Reducao de requests/limits e desabilitacao de componentes opcionais (console, connectors, optimize e web modeler) para perfil de menor custo.
+-> Ajuste de estabilidade de Elasticsearch/Zeebe sem aumento de nodegroup.
+-> Validacao final do namespace camunda com pods core em Running (elasticsearch, identity, keycloak, zeebe e bancos).
 
 ## Execucao detalhada por pasta (ordem correta)
 
@@ -231,6 +238,31 @@ Resultado esperado:
 - Repositorios ECR criados/conciliados para todas as imagens mapeadas
 - Imagens publicadas no ECR com as tags definidas em terraform.tfvars
 
+### 9) apps/camunda (estabilizacao dos pods)
+
+Objetivo: aplicar um perfil de menor consumo para manter o ambiente funcional sem ampliar quantidade de nodes.
+
+Fluxo executado:
+
+1. Ajuste do arquivo apps/camunda/values-13.6.0.yaml
+2. Desabilitacao de componentes opcionais para reduzir consumo:
+	- console
+	- connectors
+	- optimize
+	- webModeler
+	- webModelerPostgresql
+3. Reducao de requests dos componentes core (identity, keycloak, orchestration, elasticsearch)
+4. Ajuste de estabilidade do Elasticsearch (heap e limites) mantendo request baixo
+5. helm upgrade --install com o values ajustado
+6. Validacao com kubectl get pods -n camunda
+7. Validacao de storage dinamico com addon aws-ebs-csi-driver e PVCs Bound (Zeebe e Elasticsearch)
+
+Resultado esperado:
+
+- Pods core do Camunda em Running no namespace camunda
+- Ambiente estabilizado sem aumento de nodegroup
+- Provisionamento dinamico de volumes funcionando via ebs.csi.aws.com
+
 ## Comandos manuais executados (fora do Terraform)
 
 Validacoes AWS/Kubernetes:
@@ -283,6 +315,13 @@ Comandos de verificacao dos addons:
 - kubectl -n cert-manager rollout status deployment/cert-manager
 - kubectl -n cert-manager rollout status deployment/cert-manager-webhook
 - kubectl -n cert-manager rollout status deployment/cert-manager-cainjector
+
+Comandos de verificacao EBS CSI / Storage:
+
+- aws eks describe-addon --region us-east-1 --cluster-name deploy-camunda-88-eks --addon-name aws-ebs-csi-driver --query addon.status
+- kubectl -n kube-system get pods -l app.kubernetes.io/name=aws-ebs-csi-driver
+- kubectl get storageclass
+- kubectl get pvc -n camunda
 
 Comandos de verificacao ACM/DNS:
 
