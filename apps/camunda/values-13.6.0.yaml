@@ -108,7 +108,7 @@ global:
     ## @extra global.security.authentication
     authentication:
       ## @param global.security.authentication.method defines the authentication method which should be used. Possible values: basic, oidc. Could be overridden in each component.
-      method: "basic"
+      method: "oidc"
 
   ## @param global.createReleaseInfo Create config that will be used in Camunda Console.
   createReleaseInfo: true
@@ -150,20 +150,19 @@ global:
     ## @param global.ingress.external if true, the Ingress object will not be rendered. This setting is used when a non-Ingress resource, like a service mesh, is used to access the cluster.
     external: false
     ## @param global.ingress.className Ingress.className defines the class or configuration of ingress which should be used by the controller
-    className: nginx
+    className: alb
     ## @param global.ingress.labels [object] can be used to define labels which will be applied to the global HTTP ingress resource
     labels: {}
     ## @param global.ingress.annotations [object] defines the ingress related annotations, consumed mostly by the ingress controller
     annotations:
-      ingress.kubernetes.io/rewrite-target: "/"
-      nginx.ingress.kubernetes.io/ssl-redirect: "false"
-      nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
-      nginx.ingress.kubernetes.io/proxy-buffering: "on"
-      # The proxy-body-size should be the same size as global.config.requestBodySize.
-      nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: "443"
+      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:014936670405:certificate/1442b083-7c58-4b5a-b32d-5aebdcca0e38
     # Ingress.host can be used to define the host of the ingress rule. https://kubernetes.io/docs/concepts/services-networking/ingress/#ingress-rules
     ## @param global.ingress.host If not specified the rules applies to all inbound http traffic, if specified the rule applies to that host. Supports templating (e.g., {{ .Release.Name }}.example.com)
-    host: ""
+    host: "camunda.elizaaugusta.uk"
     ## @param global.ingress.pathType can be used to define the Ingress path type. https://kubernetes.io/docs/concepts/services-networking/ingress/#path-types
     pathType: Prefix
     ## @extra global.ingress.tls configuration for tls on the ingress resource https://kubernetes.io/docs/concepts/services-networking/ingress/#tls
@@ -337,7 +336,7 @@ global:
       #  defines the token issuer (Keycloak) URL, where the services can request JWT tokens.
       # Should be publicly accessible, per default we assume a port-forward to Keycloak (18080) is created before login.
       ## @param global.identity.auth.publicIssuerUrl Can be overwritten if ingress is in use and an external IP is available.
-      publicIssuerUrl: "http://localhost:18080/auth/realms/camunda-platform"
+      publicIssuerUrl: "https://camunda.elizaaugusta.uk/auth/realms/camunda-platform"
 
       ## @extra global.identity.auth.admin configuration to configure Connectors authentication specifics on global level, which can be accessed by other components
       admin:
@@ -550,7 +549,74 @@ global:
   #       name: example-cm
   #     data:
   #       test: test
-  extraManifests: []
+  extraManifests:
+    - |
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: camunda-camunda-platform-http
+        namespace: camunda
+        annotations:
+          alb.ingress.kubernetes.io/scheme: internet-facing
+          alb.ingress.kubernetes.io/target-type: ip
+          alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+          alb.ingress.kubernetes.io/ssl-redirect: "443"
+          alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:014936670405:certificate/1442b083-7c58-4b5a-b32d-5aebdcca0e38
+      spec:
+        ingressClassName: alb
+        rules:
+          - host: camunda.elizaaugusta.uk
+            http:
+              paths:
+                - path: /auth/
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: camunda-keycloak
+                      port:
+                        number: 80
+                - path: /operate
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: camunda-zeebe-gateway
+                      port:
+                        number: 8080
+                - path: /tasklist
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: camunda-zeebe-gateway
+                      port:
+                        number: 8080
+                - path: /identity
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: camunda-identity
+                      port:
+                        number: 80
+                - path: /oauth2
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: camunda-zeebe-gateway
+                      port:
+                        number: 8080
+                - path: /login
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: camunda-zeebe-gateway
+                      port:
+                        number: 8080
+                - path: /sso-callback
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: camunda-zeebe-gateway
+                      port:
+                        number: 8080
 
   ## @param global.noSecondaryStorage if true, enables engine-only/no-secondary-storage mode; this disables all secondary-storage-dependent features and components.
   noSecondaryStorage: false
@@ -662,14 +728,14 @@ identity:
   ## @param identity.initContainers can be used to set up extra init containers for the application Pod
   initContainers: []
   ## @param identity.fullURL can be used when Ingress is configured (for both multi and single domain setup).
-  fullURL: ""
+  fullURL: "https://camunda.elizaaugusta.uk/identity"
 
   # Note: Management Identity cannot be accessed over HTTP if a "contextPath" is configured.
   #       Which means that Management Identity cannot be configured in combined Ingress without HTTPS.
   #       To use Management Identity over HTTP, setup a separated Ingress using "identity.ingress" and don't set "contextPath".
   ## @param identity.contextPath can be used to make Management Identity web application works on a custom sub-path. This is mainly used to run Camunda web applications under a single domain.
   # contextPath: "/identity"
-  contextPath: ""
+  contextPath: "/identity"
 
   ## @param identity.podAnnotations can be used to define extra Management Identity pod annotations. Supports templating (e.g., {{ .Release.Name }})
   podAnnotations: {}
@@ -2435,7 +2501,7 @@ orchestration:
     ## @extra orchestration.security.authentication
     authentication:
       ## @param orchestration.security.authentication.method defines the authentication method which should be used. Possible values: `basic`, `oidc`, or `none`. It could be used to override `global.security.authentication.method`.
-      method: ""
+      method: "oidc"
       ## @param orchestration.security.authentication.unprotectedApi if true, then allow unauthenticated API access.
       unprotectedApi: false
       ## @param orchestration.security.authentication.authenticationRefreshInterval defines the session's authentication refresh time, defaulted to PT30S.
@@ -2472,7 +2538,7 @@ orchestration:
         ## @param orchestration.security.authentication.oidc.redirectUrl defines the root (or redirect) URL, which is used by Keycloak to access Tasklist.
         # Should be publicly accessible, the default value works if a port-forward to Orchestration Cluster is created to 8080.
         # Can be overwritten if ingress is in use and an external IP is available.
-        redirectUrl: "http://localhost:8080"
+        redirectUrl: "https://camunda.elizaaugusta.uk"
         ## @param orchestration.security.authentication.oidc.existingSecret [string,object] (DEPRECATED - use orchestration.security.authentication.oidc.secret instead) A string literal password can be provided. If not set, a random secret is generated. Recommended: reference an existing Kubernetes Secret using orchestration.security.authentication.oidc.existingSecret.name.
         existingSecret: ""
         ## @param orchestration.security.authentication.oidc.existingSecretKey (DEPRECATED - use orchestration.security.authentication.oidc.secret instead) defines the key within the existing secret object.
@@ -2482,9 +2548,9 @@ orchestration:
           ## @param orchestration.security.authentication.oidc.secret.inlineSecret can be used to provide the client secret as a plain-text value for non-production usage.
           inlineSecret: ""
           ## @param orchestration.security.authentication.oidc.secret.existingSecret can be used to reference an existing Kubernetes Secret containing the client secret.
-          existingSecret: ""
+          existingSecret: "camunda-orchestration-oidc"
           ## @param orchestration.security.authentication.oidc.secret.existingSecretKey defines the key within the existing secret object.
-          existingSecretKey: ""
+          existingSecretKey: "identity-orchestration-client-token"
 
     ## Authorizations configuration.
     ## @extra orchestration.security.authorizations

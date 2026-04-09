@@ -1,353 +1,301 @@
-# Deploy Camunda 8.8 AWS
-
-## Requisitos
-
-* AWS Cli instalado
-* Helm 4.* 
-
-## Comandos usados no projeto
-
-Configurar acesso a conta da AWS:
-
-aws configure --profile xxxxxx
-
-Validar acesso a conta:
-
-aws sts get-caller-identity --profile xxxxxx
-
-Terraform:
-
-terraform fmt -check
-terraform init
-terraform validate
-terraform plan
-
-## Etapas realizadas ate agora
-
--> Criacao de usuario IAM com permissoes.
--> Criacao de access key para esse usuario.
--> Login na conta via AWS CLI com o profile.
--> Estrutura inicial do repositorio no GitHub.
--> Criacao do stack de bootstrap do state remoto (S3 + DynamoDB lock) com encryption AES256.
--> Execucao de init, validate e plan no bootstrap com o profile correto.
--> Ajuste no gitignore para versionar o arquivo .terraform.lock.hcl (boa pratica).
--> Execucao de terraform apply no bootstrap (S3 + DynamoDB criados com sucesso).
--> Criacao da stack de rede em infra/network com backend remoto (S3 + DynamoDB lock).
--> Execucao de init, validate e plan da stack de rede.
--> Execucao de terraform apply da stack de rede (VPC, subnets, IGW e route tables).
--> Validacao final com terraform plan sem mudancas (No changes).
--> Criacao de orcamento (AWS Budget) para controle de custos.
--> Evolucao da stack de rede para EKS-ready (2 AZs, 2 subnets publicas e 2 privadas).
--> Adicao das tags de subnets para Kubernetes/ALB (kubernetes.io/role/elb e kubernetes.io/role/internal-elb).
--> Execucao de terraform plan da rede EKS-ready.
--> Execucao de terraform apply da rede EKS-ready (4 recursos criados, 2 atualizados).
--> Validacao final da rede EKS-ready com terraform plan sem mudancas (No changes).
--> Confirmacao de que nao ha NAT Gateway criado na VPC.
--> Criacao da stack de EKS em infra/eks com backend remoto (S3 + DynamoDB lock).
--> Execucao de terraform fmt, init, validate e plan da stack de EKS.
--> Planejamento do EKS no modo de menor custo inicial (node group em subnets publicas, sem NAT).
--> Commit das alteracoes de rede EKS-ready + stack EKS no repositorio.
--> Resolucao de lock do Terraform state do modulo EKS e conciliacao de recursos via import.
--> Execucao de terraform apply da stack de EKS com node group criado com sucesso.
--> Validacao do cluster EKS ativo com node Ready e kube-system em Running.
--> Configuracao de OIDC provider do cluster para autenticacao federada.
--> Criacao das roles IRSA para aws-load-balancer-controller e external-dns.
--> Execucao de terraform apply da etapa OIDC/IRSA sem destruicao de recursos.
--> Atualizacao do kubeconfig e validacao do cluster EKS com node group ativo.
--> Instalacao do metrics-server via Helm no namespace kube-system.
--> Instalacao do cert-manager via Helm no namespace cert-manager.
--> Instalacao do AWS Load Balancer Controller via Helm com ServiceAccount anotada por IRSA.
--> Validacao dos deployments e pods dos addons em estado Running.
--> Instalacao do addon aws-ebs-csi-driver no cluster EKS.
--> Configuracao de permissao IAM para o EBS CSI (AmazonEBSCSIDriverPolicy) com trust OIDC/IRSA.
--> Definicao da StorageClass gp2 como default e validacao de PVCs em Bound.
--> Criacao da stack de ACM em infra/platform/acm com backend remoto (S3 + DynamoDB lock).
--> Execucao de terraform fmt, init, validate e plan da stack de ACM.
--> Execucao de terraform apply da stack de ACM com certificado criado em us-east-1.
--> Criacao do registro CNAME de validacao DNS no Cloudflare (DNS only).
--> Validacao do CNAME com nslookup e emissao do certificado no ACM (status ISSUED).
--> Mapeamento das secrets obrigatorias do release Camunda no kind-camunda-test (camunda-credentials e web-modeler-credential).
--> Criacao da stack de Secrets Manager em infra/platform/secrets-manager.
--> Execucao de terraform apply da stack de Secrets Manager com carga das secrets obrigatorias no AWS Secrets Manager.
--> Criacao da stack de espelhamento de imagens em infra/platform/ecr-mirror.
--> Mapeamento das imagens em uso no namespace camunda para envio ao ECR.
--> Configuracao do Terraform para criacao/import de repositorios ECR e push das imagens via local-exec (docker pull/tag/push).
--> Preparacao de apps/camunda com values customizado para EKS (chart 13.6.0) e scripts de deploy.
--> Reducao de requests/limits e desabilitacao de componentes opcionais (console, connectors, optimize e web modeler) para perfil de menor custo.
--> Ajuste de estabilidade de Elasticsearch/Zeebe sem aumento de nodegroup.
--> Validacao final do namespace camunda com pods core em Running (elasticsearch, identity, keycloak, zeebe e bancos).
-
-## Execucao detalhada por pasta (ordem correta)
-
-Antes de rodar Terraform em qualquer pasta:
-
-1. Definir profile AWS na sessao:
-	 - $env:AWS_PROFILE="conta-id"
-
-### 1) infra/bootstrap
-
-Objetivo: criar backend remoto do Terraform (S3 + DynamoDB lock).
-
-1. terraform init
-2. terraform validate
-3. terraform plan
-4. terraform apply
-
-Resultado esperado:
-
-- Bucket S3 de state criado
-- Tabela DynamoDB de lock criada
-
-### 2) infra/network (primeira execucao)
-
-Objetivo: criar rede base.
-
-1. terraform init
-2. terraform validate
-3. terraform plan
-4. terraform apply
-
-Resultado esperado:
-
-- VPC
-- Subnet publica e privada
-- IGW
-- Route tables e associacoes
-
-### 3) infra/network (evolucao para EKS-ready)
-
-Objetivo: preparar rede para EKS em 2 AZs.
-
-1. terraform fmt
-2. terraform validate
-3. terraform plan
-4. terraform apply
-5. terraform plan (confirmacao final sem mudancas)
-
-Resultado esperado:
-
-- 2 subnets publicas + 2 subnets privadas
-- Tags kubernetes.io/role/elb e kubernetes.io/role/internal-elb
-- Tags kubernetes.io/cluster/deploy-camunda-88-eks
-
-### 4) infra/eks (criacao do cluster)
-
-Objetivo: subir cluster EKS e node group.
-
-1. terraform init
-2. terraform validate
-3. terraform plan
-4. terraform apply
-
-Observacoes importantes desta etapa:
-
-- Foi necessario tratar lock de state (force-unlock).
-- Foi necessario importar recursos ja existentes para o state:
-	- aws_iam_role.eks_cluster
-	- aws_iam_role.eks_nodes
-	- aws_eks_cluster.main
-- Depois do import, foi executado novamente:
-	1. terraform plan
-	2. terraform apply
-
-### 5) infra/eks (OIDC/IRSA)
-
-Objetivo: preparar identidade para addons.
-
-1. terraform fmt
-2. terraform init
-3. terraform validate
-4. terraform plan
-5. terraform apply
-
-Resultado esperado:
-
-- aws_iam_openid_connect_provider criado
-- Roles IRSA criadas para:
-	- aws-load-balancer-controller
-	- external-dns
-
-### 6) infra/platform/acm (certificado TLS)
-
-Objetivo: criar certificado ACM para o dominio da aplicacao e validar por DNS no Cloudflare.
-
-1. terraform fmt
-2. terraform init
-3. terraform validate
-4. terraform plan
-5. terraform apply
-
-Resultado esperado:
-
-- Certificado criado no ACM (regiao us-east-1)
-- Output com o CNAME de validacao DNS
-- Status inicial: PENDING_VALIDATION
-- Status final: ISSUED (validacao DNS concluida com SUCCESS)
-
-Depois do apply (manual no Cloudflare):
-
-1. Criar o CNAME retornado pelo Terraform em DNS > Records
-2. Manter Proxy status como DNS only
-3. Aguardar propagacao e revalidar no ACM
-
-### 7) infra/platform/secrets-manager (secrets obrigatorias do Camunda)
-
-Objetivo: enviar para o AWS Secrets Manager as secrets obrigatorias usadas no release Camunda que roda no kind-camunda-test.
-
-Secrets mapeadas como obrigatorias no values efetivo do release:
-
-- camunda-credentials
-- web-modeler-credential
-
-Fluxo executado:
-
-1. terraform init
-2. terraform validate
-3. Ler secrets do cluster kind-camunda-test (namespace camunda)
-4. Popular TF_VAR_k8s_secrets_json_map com os payloads JSON das secrets obrigatorias
-5. terraform plan
-6. terraform apply
-
-Resultado esperado:
-
-- Secrets criadas no AWS:
-	- camunda/k8s/camunda-credentials
-	- camunda/k8s/web-modeler-credential
-- Versao de secret criada para cada item
-
-### 8) infra/platform/ecr-mirror (repositorios ECR e push de imagens)
-
-Objetivo: criar repositorios no ECR e espelhar as imagens do Camunda e dependencias que estao em uso no cluster local.
-
-Fluxo executado:
-
-1. terraform init
-2. terraform validate
-3. Preencher images em terraform.tfvars com source_image, target_repository e target_tag
-4. terraform plan
-5. terraform apply
-
-Observacoes importantes:
-
-- A stack usa null_resource + local-exec para executar docker login/pull/tag/push via Terraform
-- Para repositorios ECR ja existentes, foram adicionados blocos import para conciliacao no state
-- Prefixo adotado para mirror no ECR: camunda-mirror/
-
-Resultado esperado:
-
-- Repositorios ECR criados/conciliados para todas as imagens mapeadas
-- Imagens publicadas no ECR com as tags definidas em terraform.tfvars
-
-### 9) apps/camunda (estabilizacao dos pods)
-
-Objetivo: aplicar um perfil de menor consumo para manter o ambiente funcional sem ampliar quantidade de nodes.
-
-Fluxo executado:
-
-1. Ajuste do arquivo apps/camunda/values-13.6.0.yaml
-2. Desabilitacao de componentes opcionais para reduzir consumo:
-	- console
-	- connectors
-	- optimize
-	- webModeler
-	- webModelerPostgresql
-3. Reducao de requests dos componentes core (identity, keycloak, orchestration, elasticsearch)
-4. Ajuste de estabilidade do Elasticsearch (heap e limites) mantendo request baixo
-5. helm upgrade --install com o values ajustado
-6. Validacao com kubectl get pods -n camunda
-7. Validacao de storage dinamico com addon aws-ebs-csi-driver e PVCs Bound (Zeebe e Elasticsearch)
-
-Resultado esperado:
-
-- Pods core do Camunda em Running no namespace camunda
-- Ambiente estabilizado sem aumento de nodegroup
-- Provisionamento dinamico de volumes funcionando via ebs.csi.aws.com
-
-## Comandos manuais executados (fora do Terraform)
-
-Validacoes AWS/Kubernetes:
-
-- aws sts get-caller-identity --profile conta-id
-- aws eks list-clusters --region us-east-1
-- aws eks describe-cluster --region us-east-1 --name deploy-camunda-88-eks
-- aws eks update-kubeconfig --region us-east-1 --name deploy-camunda-88-eks --profile conta-id
-- kubectl get nodes -o wide
-- kubectl get pods -A
-
-Instalacao de addons via Helm:
-
-- metrics-server
-- cert-manager
-- aws-load-balancer-controller (com ServiceAccount anotada para IRSA)
-
-1. Adicionar repositorios Helm:
-
-- helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
-- helm repo add jetstack https://charts.jetstack.io
-- helm repo add eks https://aws.github.io/eks-charts
-- helm repo update
-
-2. Criar namespace e service account:
-
-- kubectl create namespace cert-manager 
-- kubectl create serviceaccount aws-load-balancer-controller -n kube-system 
-- kubectl annotate serviceaccount aws-load-balancer-controller -n kube-system eks.amazonaws.com/role-arn=$albRole --overwrite
-
-3. Instalar addons:
-
-Variáveis que precisam ser preenchidas: 
-
-  $ACCOUNT_ID = id_account
-  $Cluster = cluster-name
-  $vpc = vpcid
-  $albRole = "arn:aws:iam::<ACCOUNT_ID>:role/deploy-camunda-88-eks-irsa-alb-controller"
-
-
-- helm upgrade --install metrics-server metrics-server/metrics-server -n kube-system
-- helm upgrade --install cert-manager jetstack/cert-manager -n cert-manager --set crds.enabled=true
-- helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller -n kube-system --set clusterName=$cluster --set serviceAccount.create=false --set serviceAccount.name=aws-load-balancer-controller --set region=us-east-1 --set vpcId=$vpc
-
-
-Comandos de verificacao dos addons:
-
-- kubectl -n kube-system rollout status deployment/metrics-server
-- kubectl -n kube-system rollout status deployment/aws-load-balancer-controller
-- kubectl -n cert-manager rollout status deployment/cert-manager
-- kubectl -n cert-manager rollout status deployment/cert-manager-webhook
-- kubectl -n cert-manager rollout status deployment/cert-manager-cainjector
-
-Comandos de verificacao EBS CSI / Storage:
-
-- aws eks describe-addon --region us-east-1 --cluster-name deploy-camunda-88-eks --addon-name aws-ebs-csi-driver --query addon.status
+﻿# Deploy Camunda 8.8 na AWS (Guia Pratico e Didatico)
+
+## Objetivo
+Este documento explica, do zero e em ordem, como foi feito o deploy do Camunda 8.8 na AWS com EKS, Terraform, Helm, ECR, Secrets Manager, ACM e Ingress com ALB.
+
+A ideia e que qualquer pessoa (mesmo sem muita experiencia) consiga entender:
+- O que cada etapa faz
+- Por que cada etapa existe
+- Como executar
+- Como validar
+- Quais problemas comuns podem aparecer
+
+## Seguranca e Privacidade
+Para evitar exposicao de dados sensiveis, este README usa placeholders.
+Sempre substitua os valores de exemplo pelos valores reais do seu ambiente.
+
+## Convencao de Placeholders (substituir no seu ambiente)
+- xxxxxxx-profile: nome do profile AWS CLI
+- xxxxxxx-region: regiao AWS (exemplo: us-east-1)
+- xxxxxxx-cluster: nome do cluster EKS
+- xxxxxxx-domain: dominio publico usado no Ingress
+- xxxxxxx-account-id: ID da conta AWS
+- xxxxxxx-vpc-id: ID da VPC
+- xxxxxxx-cert-arn: ARN do certificado ACM emitido
+- xxxxxxx-alb-dns: DNS do ALB criado pelo Ingress
+- xxxxxxx-role-arn: ARN de role IAM/IRSA
+
+## Pre-requisitos
+- AWS CLI instalado e autenticado
+- Terraform instalado
+- kubectl instalado
+- Helm instalado
+- Docker instalado (para espelhar imagens no ECR)
+- Acesso ao Cloudflare (ou provedor DNS equivalente)
+
+## Fluxo Geral do Projeto
+1. Criar backend remoto do Terraform (S3 + DynamoDB).
+2. Criar rede (VPC/subnets) preparada para EKS.
+3. Criar cluster EKS e node group.
+4. Configurar OIDC/IRSA e addons do cluster.
+5. Garantir storage dinamico (EBS CSI) para PVCs.
+6. Criar e validar certificado ACM.
+7. Migrar secrets para AWS Secrets Manager.
+8. Espelhar imagens no ECR.
+9. Fazer deploy do Camunda com values ajustado para custo.
+10. Expor via Ingress ALB com HTTPS e DNS publico.
+
+## Etapa 0 - Controle de custo (obrigatorio)
+### O que esta etapa faz
+Cria um Budget para evitar surpresa de custo.
+
+### Comando/acao
+- Criar AWS Budget mensal com limite baixo e alertas.
+
+### Validacao
+- Budget criado e ativo no Billing.
+
+## Etapa 1 - Backend remoto do Terraform (infra/bootstrap)
+### O que esta etapa faz
+Cria:
+- Bucket S3 para state
+- DynamoDB para lock
+
+Sem isso, o Terraform pode corromper estado em execucoes concorrentes.
+
+### Comandos
+- terraform init
+- terraform validate
+- terraform plan
+- terraform apply
+
+### Validacao
+- Bucket de state criado
+- Tabela de lock criada
+
+## Etapa 2 - Rede base e rede EKS-ready (infra/network)
+### O que esta etapa faz
+Cria VPC, subnets e rotas.
+Depois evolui para topologia pronta para EKS em 2 AZs.
+
+### Comandos
+- terraform init
+- terraform validate
+- terraform plan
+- terraform apply
+
+### Validacao
+- Subnets publicas e privadas em 2 AZs
+- Tags para Kubernetes/ALB aplicadas
+- Plan final sem mudancas
+
+## Etapa 3 - Cluster EKS (infra/eks)
+### O que esta etapa faz
+Cria o cluster EKS e node group.
+
+### Comandos
+- terraform init
+- terraform validate
+- terraform plan
+- terraform apply
+
+### Validacao
+- Cluster criado
+- Nodes em Ready
+- Pods de sistema em Running
+
+### Observacao importante
+Se houver recursos ja existentes, pode ser necessario import no state antes do apply.
+
+## Etapa 4 - OIDC/IRSA e addons principais
+### O que esta etapa faz
+- Habilita OIDC provider do cluster
+- Cria roles IRSA para addons
+- Instala:
+  - metrics-server
+  - cert-manager
+  - aws-load-balancer-controller
+
+### Comandos de referencia
+- helm repo add ...
+- helm upgrade --install ...
+- kubectl rollout status ...
+
+### Validacao
+- Deployments dos addons em Running
+
+## Etapa 5 - Storage dinamico com EBS CSI
+### O que esta etapa faz
+Instala o addon aws-ebs-csi-driver e configura permissoes IAM para provisionar volumes EBS automaticamente.
+
+Sem esta etapa, PVCs de componentes stateful podem ficar em Pending.
+
+### Comandos de validacao
+- aws eks describe-addon --region xxxxxxx-region --cluster-name xxxxxxx-cluster --addon-name aws-ebs-csi-driver --query addon.status
 - kubectl -n kube-system get pods -l app.kubernetes.io/name=aws-ebs-csi-driver
 - kubectl get storageclass
 - kubectl get pvc -n camunda
 
-Comandos de verificacao ACM/DNS:
+### Validacao esperada
+- Addon em Active
+- StorageClass padrao definida
+- PVCs em Bound
 
-- aws acm describe-certificate --region us-east-1 --certificate-arn <CERTIFICATE_ARN>
-- nslookup -type=CNAME <NOME_DO_CNAME_DE_VALIDACAO>
+## Etapa 6 - Certificado TLS ACM (infra/platform/acm)
+### O que esta etapa faz
+Cria certificado TLS no ACM e gera CNAME de validacao DNS.
 
-Comandos de verificacao Secrets Manager:
+### Comandos
+- terraform init
+- terraform validate
+- terraform plan
+- terraform apply
 
-- aws secretsmanager list-secrets --region us-east-1 --query "SecretList[?starts_with(Name, 'camunda/k8s/')].Name"
-- aws secretsmanager get-secret-value --region us-east-1 --secret-id camunda/k8s/camunda-credentials --query SecretString --output text
-- aws secretsmanager get-secret-value --region us-east-1 --secret-id camunda/k8s/web-modeler-credential --query SecretString --output text
+### Validacao
+- Status inicial PENDING_VALIDATION
+- Criar CNAME no DNS
+- Status final ISSUED
 
-Comandos de verificacao ECR:
+## Etapa 7 - Secrets no AWS Secrets Manager (infra/platform/secrets-manager)
+### O que esta etapa faz
+Migra secrets obrigatorias do ambiente local para AWS.
 
-- aws ecr describe-repositories --region us-east-1 --query "repositories[?starts_with(repositoryName, 'camunda-mirror/')].repositoryName"
-- aws ecr describe-images --region us-east-1 --repository-name camunda-mirror/camunda/camunda --query "length(imageDetails)"
-- aws ecr describe-images --region us-east-1 --repository-name camunda-mirror/camunda/connectors-bundle --query "length(imageDetails)"
-- aws ecr describe-images --region us-east-1 --repository-name camunda-mirror/camunda/console --query "length(imageDetails)"
+### Secrets mapeadas
+- camunda-credentials
+- web-modeler-credential
 
-Nota:
+### Fluxo
+1. Ler secrets do cluster de origem
+2. Popular variavel TF com payloads JSON
+3. Plan e apply
 
-- O fluxo recomendado e sempre: terraform init -> terraform validate -> terraform plan -> terraform apply
+### Validacao
+- Secrets criadas no Secrets Manager
+- Secret versions criadas
+
+## Etapa 8 - ECR mirror de imagens (infra/platform/ecr-mirror)
+### O que esta etapa faz
+Cria repositorios ECR e envia imagens usadas no deploy.
+
+### Como funciona
+A stack usa local-exec para docker login/pull/tag/push.
+
+### Validacao
+- Repositorios criados/conciliados
+- Imagens com tags no ECR
+
+## Etapa 9 - Deploy Camunda com perfil de custo reduzido (apps/camunda)
+### O que esta etapa faz
+Aplica values customizado para EKS e ajusta recursos para reduzir custo sem quebrar o ambiente.
+
+### Ajustes feitos
+- Reducao de requests/limits
+- Desabilitacao de componentes opcionais no perfil de baixo custo
+- Ajustes de estabilidade para Elasticsearch e Zeebe
+
+### Comando
+- helm upgrade --install camunda camunda/camunda-platform --version 13.6.0 -n camunda -f apps/camunda/values-13.6.0.yaml
+
+### Validacao
+- Pods core em Running:
+  - Elasticsearch
+  - Identity
+  - Keycloak
+  - Zeebe
+  - Bancos
+
+## Etapa 10 - Ingress ALB + HTTPS + DNS publico
+### O que esta etapa faz
+Exposicao publica via ALB com HTTPS, usando certificado ACM.
+
+### Ajustes principais no values
+- global.ingress.enabled: true
+- global.ingress.className: alb
+- global.ingress.host: xxxxxxx-domain
+- Anotacoes ALB para:
+  - internet-facing
+  - target-type ip
+  - listeners 80/443
+  - redirect HTTP -> HTTPS
+  - certificate-arn
+
+### Comandos de validacao
+- kubectl get ingress -n camunda -o wide
+- kubectl describe ingress camunda-camunda-platform-http -n camunda
+- aws elbv2 describe-load-balancers --region xxxxxxx-region
+- nslookup xxxxxxx-domain 1.1.1.1
+- nslookup xxxxxxx-domain 8.8.8.8
+
+### Resultado esperado
+- Ingress reconciliado
+- ALB em active
+- HTTPS respondendo no dominio
+
+### Persistencia OIDC (importante)
+- Manter `global.security.authentication.method` como `oidc`.
+- Manter `global.identity.auth.publicIssuerUrl` com dominio publico (`https://camunda.elizaaugusta.uk/auth/realms/camunda-platform`).
+- Manter `identity.fullURL` como `https://camunda.elizaaugusta.uk/identity` e `identity.contextPath` como `/identity`.
+- Manter `orchestration.security.authentication.method` como `oidc`.
+- Manter `orchestration.security.authentication.oidc.redirectUrl` como `https://camunda.elizaaugusta.uk`.
+- Referenciar secret OIDC da orchestration:
+  - `orchestration.security.authentication.oidc.secret.existingSecret: camunda-orchestration-oidc`
+  - `orchestration.security.authentication.oidc.secret.existingSecretKey: identity-orchestration-client-token`
+- No ingress customizado (`global.extraManifests`), manter os paths de auth/callback:
+  - `/oauth2`
+  - `/login`
+  - `/sso-callback`
+
+## Problemas reais encontrados (e como resolvemos)
+### 1) Pods Pending por falta de recurso
+Causa: requests altos para o tipo de node.
+Acao: reduzir requests/limits e desabilitar componentes opcionais.
+
+### 2) PVC Pending
+Causa: storage dinamico nao configurado corretamente.
+Acao: instalar/configurar EBS CSI e ajustar StorageClass padrao.
+
+### 3) DNS local com NXDOMAIN, mesmo com tudo certo na AWS
+Causa: resolvedor local (roteador/provedor) sem resolver cadeia completa.
+Acao:
+- Validar em DNS publico (1.1.1.1 / 8.8.8.8)
+- Testar por outra rede/dispositivo
+- (Opcional) trocar DNS local para resolvedor publico
+
+## Comandos de verificacao rapida
+### Cluster e pods
+- kubectl get nodes -o wide
+- kubectl get pods -n camunda -o wide
+- kubectl get pods -A
+
+### Ingress e ALB
+- kubectl get ingress -n camunda -o wide
+- kubectl describe ingress camunda-camunda-platform-http -n camunda
+- aws elbv2 describe-load-balancers --region xxxxxxx-region --query "LoadBalancers[?starts_with(LoadBalancerName, 'k8s-camunda')]"
+
+### DNS e HTTPS
+- nslookup xxxxxxx-domain 1.1.1.1
+- nslookup xxxxxxx-domain 8.8.8.8
+- curl -I https://xxxxxxx-domain/auth/
+
+### Storage
+- kubectl get storageclass
+- kubectl get pvc -n camunda
+
+## Estado atual (resumo)
+- Infra principal criada
+- Addons essenciais funcionando
+- EBS CSI funcionando
+- Camunda core em Running
+- Ingress ALB criado com HTTPS
+- Dominio publico dependendo apenas de propagacao/qualidade do DNS local de quem acessa
+
+## Boas praticas operacionais
+- Sempre executar: terraform init -> terraform validate -> terraform plan -> terraform apply
+- Nunca expor valores de secret em README ou log
+- Usar placeholders (xxxxxxx) em toda documentacao publica
+- Validar DNS em resolvedor publico antes de concluir que e problema da AWS
 
 ## Proximos passos
-
-1. Finalizar o envio de todas as imagens faltantes para o ECR.
-2. Preparar values para o EKS apontando para imagens do ECR e secrets da AWS.
-3. Instalar o chart Camunda no cluster EKS e validar pods/servicos.
-4. Configurar Ingress + Load Balancer + DNS para acesso HTTPS.
+1. Confirmar acesso HTTPS por mais de uma rede/provedor.
+2. Registrar endpoint final validado e horario da validacao.
+3. Opcional: revisar perfil de custo para manter operacao dentro do orcamento.

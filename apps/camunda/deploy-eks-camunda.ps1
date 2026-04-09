@@ -1,6 +1,6 @@
 param(
-  [string]$AwsProfile = "conta-014936670405",
-  [string]$EksContext = "arn:aws:eks:us-east-1:014936670405:cluster/deploy-camunda-88-eks",
+  [string]$AwsProfile = "conta-xxxx",
+  [string]$EksContext = "arn:aws:eks:us-east-1:xxxxx:cluster/deploy-camunda-88-eks",
   [string]$Namespace = "camunda",
   [string]$ReleaseName = "camunda",
   [string]$ChartVersion = "13.6.0",

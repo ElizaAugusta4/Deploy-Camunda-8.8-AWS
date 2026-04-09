@@ -1,7 +1,7 @@
 param(
-  [string]$AwsProfile = "conta-014936670405",
+  [string]$AwsProfile = "conta-xxxxx",
   [string]$AwsRegion = "us-east-1",
-  [string]$EksContext = "arn:aws:eks:us-east-1:014936670405:cluster/deploy-camunda-88-eks",
+  [string]$EksContext = "arn:aws:eks:us-east-1:xxxxxx:cluster/deploy-camunda-88-eks",
   [string]$Namespace = "camunda"
 )
 
