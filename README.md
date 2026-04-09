@@ -1,5 +1,10 @@
 # Deploy Camunda 8.8 AWS
 
+## Requisitos
+
+* AWS Cli instalado
+* Helm 4.* 
+
 ## Comandos usados no projeto
 
 Configurar acesso a conta da AWS:
@@ -53,6 +58,17 @@ terraform plan
 -> Instalacao do cert-manager via Helm no namespace cert-manager.
 -> Instalacao do AWS Load Balancer Controller via Helm com ServiceAccount anotada por IRSA.
 -> Validacao dos deployments e pods dos addons em estado Running.
+-> Criacao da stack de ACM em infra/platform/acm com backend remoto (S3 + DynamoDB lock).
+-> Execucao de terraform fmt, init, validate e plan da stack de ACM.
+-> Execucao de terraform apply da stack de ACM com certificado criado em us-east-1.
+-> Criacao do registro CNAME de validacao DNS no Cloudflare (DNS only).
+-> Validacao do CNAME com nslookup e emissao do certificado no ACM (status ISSUED).
+-> Mapeamento das secrets obrigatorias do release Camunda no kind-camunda-test (camunda-credentials e web-modeler-credential).
+-> Criacao da stack de Secrets Manager em infra/platform/secrets-manager.
+-> Execucao de terraform apply da stack de Secrets Manager com carga das secrets obrigatorias no AWS Secrets Manager.
+-> Criacao da stack de espelhamento de imagens em infra/platform/ecr-mirror.
+-> Mapeamento das imagens em uso no namespace camunda para envio ao ECR.
+-> Configuracao do Terraform para criacao/import de repositorios ECR e push das imagens via local-exec (docker pull/tag/push).
 
 ## Execucao detalhada por pasta (ordem correta)
 
@@ -144,6 +160,77 @@ Resultado esperado:
 	- aws-load-balancer-controller
 	- external-dns
 
+### 6) infra/platform/acm (certificado TLS)
+
+Objetivo: criar certificado ACM para o dominio da aplicacao e validar por DNS no Cloudflare.
+
+1. terraform fmt
+2. terraform init
+3. terraform validate
+4. terraform plan
+5. terraform apply
+
+Resultado esperado:
+
+- Certificado criado no ACM (regiao us-east-1)
+- Output com o CNAME de validacao DNS
+- Status inicial: PENDING_VALIDATION
+- Status final: ISSUED (validacao DNS concluida com SUCCESS)
+
+Depois do apply (manual no Cloudflare):
+
+1. Criar o CNAME retornado pelo Terraform em DNS > Records
+2. Manter Proxy status como DNS only
+3. Aguardar propagacao e revalidar no ACM
+
+### 7) infra/platform/secrets-manager (secrets obrigatorias do Camunda)
+
+Objetivo: enviar para o AWS Secrets Manager as secrets obrigatorias usadas no release Camunda que roda no kind-camunda-test.
+
+Secrets mapeadas como obrigatorias no values efetivo do release:
+
+- camunda-credentials
+- web-modeler-credential
+
+Fluxo executado:
+
+1. terraform init
+2. terraform validate
+3. Ler secrets do cluster kind-camunda-test (namespace camunda)
+4. Popular TF_VAR_k8s_secrets_json_map com os payloads JSON das secrets obrigatorias
+5. terraform plan
+6. terraform apply
+
+Resultado esperado:
+
+- Secrets criadas no AWS:
+	- camunda/k8s/camunda-credentials
+	- camunda/k8s/web-modeler-credential
+- Versao de secret criada para cada item
+
+### 8) infra/platform/ecr-mirror (repositorios ECR e push de imagens)
+
+Objetivo: criar repositorios no ECR e espelhar as imagens do Camunda e dependencias que estao em uso no cluster local.
+
+Fluxo executado:
+
+1. terraform init
+2. terraform validate
+3. Preencher images em terraform.tfvars com source_image, target_repository e target_tag
+4. terraform plan
+5. terraform apply
+
+Observacoes importantes:
+
+- A stack usa null_resource + local-exec para executar docker login/pull/tag/push via Terraform
+- Para repositorios ECR ja existentes, foram adicionados blocos import para conciliacao no state
+- Prefixo adotado para mirror no ECR: camunda-mirror/
+
+Resultado esperado:
+
+- Repositorios ECR criados/conciliados para todas as imagens mapeadas
+- Imagens publicadas no ECR com as tags definidas em terraform.tfvars
+
 ## Comandos manuais executados (fora do Terraform)
 
 Validacoes AWS/Kubernetes:
@@ -161,6 +248,34 @@ Instalacao de addons via Helm:
 - cert-manager
 - aws-load-balancer-controller (com ServiceAccount anotada para IRSA)
 
+1. Adicionar repositorios Helm:
+
+- helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+- helm repo add jetstack https://charts.jetstack.io
+- helm repo add eks https://aws.github.io/eks-charts
+- helm repo update
+
+2. Criar namespace e service account:
+
+- kubectl create namespace cert-manager 
+- kubectl create serviceaccount aws-load-balancer-controller -n kube-system 
+- kubectl annotate serviceaccount aws-load-balancer-controller -n kube-system eks.amazonaws.com/role-arn=$albRole --overwrite
+
+3. Instalar addons:
+
+Variáveis que precisam ser preenchidas: 
+
+  $ACCOUNT_ID = id_account
+  $Cluster = cluster-name
+  $vpc = vpcid
+  $albRole = "arn:aws:iam::<ACCOUNT_ID>:role/deploy-camunda-88-eks-irsa-alb-controller"
+
+
+- helm upgrade --install metrics-server metrics-server/metrics-server -n kube-system
+- helm upgrade --install cert-manager jetstack/cert-manager -n cert-manager --set crds.enabled=true
+- helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller -n kube-system --set clusterName=$cluster --set serviceAccount.create=false --set serviceAccount.name=aws-load-balancer-controller --set region=us-east-1 --set vpcId=$vpc
+
+
 Comandos de verificacao dos addons:
 
 - kubectl -n kube-system rollout status deployment/metrics-server
@@ -169,6 +284,31 @@ Comandos de verificacao dos addons:
 - kubectl -n cert-manager rollout status deployment/cert-manager-webhook
 - kubectl -n cert-manager rollout status deployment/cert-manager-cainjector
 
+Comandos de verificacao ACM/DNS:
+
+- aws acm describe-certificate --region us-east-1 --certificate-arn <CERTIFICATE_ARN>
+- nslookup -type=CNAME <NOME_DO_CNAME_DE_VALIDACAO>
+
+Comandos de verificacao Secrets Manager:
+
+- aws secretsmanager list-secrets --region us-east-1 --query "SecretList[?starts_with(Name, 'camunda/k8s/')].Name"
+- aws secretsmanager get-secret-value --region us-east-1 --secret-id camunda/k8s/camunda-credentials --query SecretString --output text
+- aws secretsmanager get-secret-value --region us-east-1 --secret-id camunda/k8s/web-modeler-credential --query SecretString --output text
+
+Comandos de verificacao ECR:
+
+- aws ecr describe-repositories --region us-east-1 --query "repositories[?starts_with(repositoryName, 'camunda-mirror/')].repositoryName"
+- aws ecr describe-images --region us-east-1 --repository-name camunda-mirror/camunda/camunda --query "length(imageDetails)"
+- aws ecr describe-images --region us-east-1 --repository-name camunda-mirror/camunda/connectors-bundle --query "length(imageDetails)"
+- aws ecr describe-images --region us-east-1 --repository-name camunda-mirror/camunda/console --query "length(imageDetails)"
+
 Nota:
 
 - O fluxo recomendado e sempre: terraform init -> terraform validate -> terraform plan -> terraform apply
+
+## Proximos passos
+
+1. Finalizar o envio de todas as imagens faltantes para o ECR.
+2. Preparar values para o EKS apontando para imagens do ECR e secrets da AWS.
+3. Instalar o chart Camunda no cluster EKS e validar pods/servicos.
+4. Configurar Ingress + Load Balancer + DNS para acesso HTTPS.
