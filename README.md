@@ -294,8 +294,3 @@ Acao:
 - Nunca expor valores de secret em README ou log
 - Usar placeholders (xxxxxxx) em toda documentacao publica
 - Validar DNS em resolvedor publico antes de concluir que e problema da AWS
-
-## Proximos passos
-1. Confirmar acesso HTTPS por mais de uma rede/provedor.
-2. Registrar endpoint final validado e horario da validacao.
-3. Opcional: revisar perfil de custo para manter operacao dentro do orcamento.
